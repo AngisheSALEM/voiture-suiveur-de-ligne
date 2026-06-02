@@ -1,4 +1,4 @@
-# 🚗 Robot Suiveur de Ligne à 4 Moteurs
+# 🚗 Robot Suiveur de Ligne à 4 Moteurs, Détecteur d'Obstacles & Alarme iPhone
 
 Ce dépôt contient le code de commande propre et optimisé pour le robot suiveur de ligne inspiré de la vidéo de **'Hash Include Electronics'**. 
 
@@ -16,7 +16,7 @@ Le code a été conçu avec une architecture modulaire en C++ procédural (sans 
   * `LOW` lorsqu'il est sur la **surface blanche**
 
 ### 2. Contrôleur Moteurs L298N & Châssis 4 Moteurs
-Bien que votre châssis possède **4 moteurs CC (4 roues motrices)**, le driver L298N ne possède que **2 canaux de commande physiques** (A et B). Les moteurs doivent donc être branchés en parallèle sur les bornes du driver :
+Bien que votre châssis possède **4 moteurs CC (4 roues motrices)**, le driver L298N ne possède que **2 canaux de commande physiques** (A et B). Les moteurs sont donc branchés en parallèle sur les bornes du driver :
 
 * **Groupe Moteurs Droit (Avant + Arrière) :** Branchés ensemble en parallèle sur les sorties `OUT1` & `OUT2` du L298N.
   * **Vitesse (PWM) :** Connecté à la broche **D5** (ENA)
@@ -26,6 +26,13 @@ Bien que votre châssis possède **4 moteurs CC (4 roues motrices)**, le driver 
   * **Direction :** Broches **D9** (IN3) et **D10** (IN4)
 
 * **Vitesse Cible :** Vitesse fixée à **180** (valeur PWM de 0 à 255).
+
+### 3. Capteur Ultrason HC-SR04 & Avertisseur (Buzzer)
+Pour assurer la détection et la sécurité du robot face à un obstacle :
+* **Trigger (Trig) :** Connecté à la broche **D2** (Émission du signal de mesure)
+* **Echo :** Connecté à la broche **D3** (Réception du signal de mesure)
+* **Buzzer Passif :** Connecté à la broche **D4** (Émission de la sirène)
+* **Distance critique :** **20 cm** (en dessous de ce seuil, le robot réalise un arrêt d'urgence).
 
 ---
 
@@ -37,16 +44,21 @@ Le code applique une séparation stricte des tâches :
 graph TD
     A[Bouton Démarrage / Setup] --> B[Initialisation Pins & Timer 0]
     B --> C[BOUCLE PRINCIPALE : loop]
-    C --> D[1. MODULE CAPTEURS : readSensors]
-    D --> E[Mise à jour des variables globales]
-    E --> F[2. DÉCISION & COORDINATION]
-    F --> G[3. MODULE MOTEURS : rotateMotor]
-    G --> C
+    C --> D[1. MESURE DISTANCE : getDistance]
+    D --> E{Obstacle en face <= 20cm ?}
+    E -- Oui --> F[Arrêt Complet & playIphoneAlarm]
+    E -- Non --> G[2. MODULE CAPTEURS : readSensors]
+    G --> H[Mise à jour des variables globales]
+    H --> I[3. DÉCISION & COORDINATION]
+    I --> J[4. MODULE MOTEURS : rotateMotor]
+    J --> C
 ```
 
-1. **Module de Lecture (`readSensors`) :** Interroge l'état des deux capteurs numériques et enregistre les résultats dans des variables globales. Il ne prend aucune décision.
-2. **Module d'Action (`rotateMotor`) :** Reçoit des commandes de vitesses positives uniquement (la voiture ne recule pas) et pilote directement les broches du L298N.
-3. **Logique de Guidage (dans le `loop`) :** Analyse les données de détection et appelle le module moteur de manière coordonnée.
+1. **Module de Distance (`getDistance`) :** Gère les microsecondes d'émissions/réceptions du capteur HC-SR04 pour retourner une distance propre en centimètres.
+2. **Module de Lecture IR (`readSensors`) :** Interroge l'état des deux capteurs numériques et enregistre les résultats dans des variables globales.
+3. **Module Avertisseur (`playIphoneAlarm`) :** Joue la mélodie caractéristique "Radar / Classic Alarm" des téléphones iPhone grâce à des appels cadencés de la fonction `tone()`.
+4. **Module d'Action (`rotateMotor`) :** Reçoit des commandes de vitesses positives uniquement (la voiture ne recule pas) et pilote directement les broches du L298N.
+5. **Logique de Guidage (dans le `loop`) :** Analyse les données de détection et appelle le module moteur de manière coordonnée.
 
 ---
 
@@ -62,10 +74,11 @@ Cela permet d'élever la fréquence PWM à exactement **7812.5 Hz** ($16\text{ M
 
 > [!WARNING]  
 > **Note d'expert :** Le Timer 0 régit également les fonctions de temps internes d'Arduino (`delay()`, `millis()`, `micros()`). En divisant le prescaler par 8, le temps s'écoule **8 fois plus vite** pour le système.
-> * Si vous avez besoin de faire un temps d'attente réel d'une seconde ($1000\text{ ms}$), vous devez appeler :
+> * Si vous avez besoin de faire un temps d'attente réel d'une seconde ($1000\text{ ms}$), vous devez multiplier la valeur par 8 :
 >   ```cpp
 >   delay(8000); // 8000 millisecondes internes = 1 seconde réelle
 >   ```
+> * **C'est ce qui a été fait dans `playIphoneAlarm()` pour garantir que la musique soit jouée au tempo original de l'iPhone !**
 
 ---
 
