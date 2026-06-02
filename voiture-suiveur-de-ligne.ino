@@ -6,27 +6,20 @@
  * Ce code est simple, modulaire et sans classes C++. Il sépare proprement la 
  * lecture des capteurs de l'actionnement des moteurs.
  * 
- * --- NOTE D'EXPERT SUR LA CONFIGURATION À 4 MOTEURS ---
- * Bien que la voiture possède 4 moteurs (4 roues motrices), le driver L298N ne possède 
- * que 2 canaux de sortie (A et B). Les moteurs sont donc connectés en parallèle :
+ * --- NOTE SUR LES 4 MOTEURS ---
+ * Les moteurs droits (avant et arrière) sont branchés en parallèle sur le canal A du L298N (OUT1 & OUT2).
+ * Les moteurs gauches (avant et arrière) sont branchés en parallèle sur le canal B du L298N (OUT3 & OUT4).
  * 
- * 1. CÔTÉ DROIT : Les 2 moteurs droits (avant-droit et arrière-droit) sont branchés 
- *    ensemble en parallèle sur les sorties OUT1 & OUT2 du L298N.
- *    Ils sont pilotés simultanément par le groupe ENA, IN1, IN2.
- * 
- * 2. CÔTÉ GAUCHE : Les 2 moteurs gauches (avant-gauche et arrière-gauche) sont branchés 
- *    ensemble en parallèle sur les sorties OUT3 & OUT4 du L298N.
- *    Ils sont pilotés simultanément par le groupe ENB, IN3, IN4.
- * 
- * Ainsi, d'un point de vue logiciel, le code pilote 2 groupes de moteurs (Droit et Gauche),
- * ce qui rend ce programme 100% compatible et optimisé pour votre robot 4 roues motrices !
- * 
- * Note de fonctionnement : La voiture évite les espaces blancs, reste sur la ligne 
- * noire et ne recule jamais (elle s'arrête ou tourne en bloquant le côté intérieur).
+ * --- NOUVELLES FONCTIONNALITÉS ---
+ * 1. Capteur Ultrason HC-SR04 (Trig=D2, Echo=D3) : Détecte un obstacle en face à moins de 20 cm.
+ * 2. Buzzer Passif (D4) : Siffle l'alarme d'iPhone (mélodie Radar / Classic Alarm) en cas d'obstacle, 
+ *    et force l'arrêt complet de la voiture.
  * 
  * @author Expert Programmation Embarquée
  * @date 2026-06-02
  */
+
+#include <Arduino.h>
 
 // =========================================================================
 // 1. CONFIGURATION DU MATÉRIEL & PINOUT
@@ -46,13 +39,20 @@ const int PIN_IN2 = 8;  // Moteurs Droits Direction B
 const int PIN_IN3 = 9;  // Moteurs Gauches Direction A
 const int PIN_IN4 = 10; // Moteurs Gauches Direction B
 
-// --- Vitesse de déplacement ---
-const int TARGET_SPEED = 180; // Vitesse cible PWM (0 - 255)
+// --- Capteur Ultrason HC-SR04 ---
+const int PIN_TRIG = 2; // Broche Trigger
+const int PIN_ECHO = 3; // Broche Echo
+
+// --- Avertisseur Sonore ---
+const int PIN_BUZZER = 4; // Broche Buzzer Passif
+
+// --- Paramètres de comportement ---
+const int TARGET_SPEED = 180;              // Vitesse cible PWM (0 - 255)
+const int OBSTACLE_DISTANCE_THRESHOLD = 20; // Distance d'arrêt d'urgence (en cm)
 
 // =========================================================================
 // 2. VARIABLES GLOBALES DE STOCKAGE (Coordination)
 // =========================================================================
-// Ces variables permettent de faire la transition entre la lecture et l'action
 int sensorRightState = LOW; // État du capteur droit (HIGH = noir, LOW = blanc)
 int sensorLeftState = LOW;  // État du capteur gauche (HIGH = noir, LOW = blanc)
 
@@ -62,23 +62,77 @@ int sensorLeftState = LOW;  // État du capteur gauche (HIGH = noir, LOW = blanc
 
 /**
  * @brief Lit l'état des capteurs IR et met à jour les variables globales.
- * 
- * Cette fonction s'occupe exclusivement de l'acquisition des données physiques.
  */
 void readSensors() {
   sensorRightState = digitalRead(PIN_SENSOR_RIGHT);
   sensorLeftState = digitalRead(PIN_SENSOR_LEFT);
 }
 
+/**
+ * @brief Calcule la distance de l'obstacle en face à l'aide de l'ultrason HC-SR04.
+ * @return Distance en centimètres (cm). Renvoie 999 en cas d'erreur ou d'absence d'obstacle.
+ */
+long getDistance() {
+  // Assure un signal propre
+  digitalWrite(PIN_TRIG, LOW);
+  delayMicroseconds(2);
+
+  // Envoie une impulsion de 10 microsecondes
+  digitalWrite(PIN_TRIG, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(PIN_TRIG, LOW);
+
+  // Lit la durée du signal de retour sur Echo (en microsecondes)
+  // Timeout réglé à 30 ms (correspondant à ~5 mètres maximum d'analyse)
+  long duration = pulseIn(PIN_ECHO, HIGH, 30000);
+
+  // Si le signal a expiré sans retour
+  if (duration == 0) {
+    return 999;
+  }
+
+  // Calcul de la distance en cm : Vitesse du son (340 m/s) / 2
+  long distance = duration * 0.0343 / 2;
+  return distance;
+}
+
 // =========================================================================
-// 4. MODULE MOTEURS (Action)
+// 4. MODULE AVERTISSEUR (Buzzer & iPhone Alarm)
+// =========================================================================
+
+/**
+ * @brief Joue le motif de la célèbre alarme "Radar / Classic Alarm" d'iOS.
+ * 
+ * NOTE D'EXPERT : L'augmentation de la fréquence du Timer 0 (pins 5 & 6)
+ * fait que delay() s'exécute 8 fois plus vite. Nous appliquons donc un 
+ * coefficient multiplicateur standard (* 8) pour conserver le rythme réel.
+ */
+void playIphoneAlarm() {
+  // Mélodie du signal d'alerte iPhone "Radar"
+  // Motif de 4 notes rapides ascendantes suivi d'une note longue
+  int alarmMelody[] = {880, 988, 1047, 1318}; // Fréquences (La5, Si5, Do6, Mi6)
+  int noteDurations[] = {100, 100, 100, 300}; // Durée de chaque note en ms
+
+  for (int repeat = 0; repeat < 2; repeat++) { // Répète l'alarme 2 fois
+    for (int i = 0; i < 4; i++) {
+      // Émission du son sur le buzzer passif
+      tone(PIN_BUZZER, alarmMelody[i], noteDurations[i] * 8);
+      
+      // Attente pour séparer proprement les notes
+      delay((noteDurations[i] + 30) * 8);
+    }
+    // Courte pause entre les motifs répétitifs
+    noTone(PIN_BUZZER);
+    delay(200 * 8);
+  }
+}
+
+// =========================================================================
+// 5. MODULE MOTEURS (Action)
 // =========================================================================
 
 /**
  * @brief Contrôle la vitesse des groupes de moteurs droit et gauche (sans marche arrière).
- * 
- * Comme le robot ne doit jamais reculer, les vitesses négatives ne sont pas gérées.
- * 
  * @param speedRight Vitesse des moteurs droits (0 à 255).
  * @param speedLeft Vitesse des moteurs gauches (0 à 255).
  */
@@ -110,21 +164,28 @@ void rotateMotor(int speedRight, int speedLeft) {
 }
 
 // =========================================================================
-// 5. INITIALISATION DU SYSTÈME (Setup)
+// 6. INITIALISATION DU SYSTÈME (Setup)
 // =========================================================================
 
 void setup() {
-  // Configuration des broches des capteurs IR en entrée numérique
+  // Configuration des broches des capteurs IR en entrée
   pinMode(PIN_SENSOR_RIGHT, INPUT);
   pinMode(PIN_SENSOR_LEFT, INPUT);
 
-  // Configuration des broches du L298N en sortie numérique
+  // Configuration des broches du L298N en sortie
   pinMode(PIN_ENA, OUTPUT);
   pinMode(PIN_ENB, OUTPUT);
   pinMode(PIN_IN1, OUTPUT);
   pinMode(PIN_IN2, OUTPUT);
   pinMode(PIN_IN3, OUTPUT);
   pinMode(PIN_IN4, OUTPUT);
+
+  // Configuration du capteur ultrason HC-SR04
+  pinMode(PIN_TRIG, OUTPUT);
+  pinMode(PIN_ECHO, INPUT);
+
+  // Configuration du Buzzer
+  pinMode(PIN_BUZZER, OUTPUT);
 
   // Sécurité : Arrêt complet au démarrage
   rotateMotor(0, 0);
@@ -139,27 +200,39 @@ void setup() {
 }
 
 // =========================================================================
-// 6. BOUCLE PRINCIPALE (Logique de Décision)
+// 7. BOUCLE PRINCIPALE (Logique de Décision)
 // =========================================================================
 
 void loop() {
-  // --- Étape 1 : Lecture des capteurs ---
+  // --- Étape 1 : Vérification d'obstacle (Sécurité Prioritaire) ---
+  long distance = getDistance();
+
+  if (distance > 0 && distance <= OBSTACLE_DISTANCE_THRESHOLD) {
+    // Obstacle détecté ! Arrêt d'urgence immédiat de la voiture
+    rotateMotor(0, 0);
+
+    // Déclenchement de l'avertisseur sonore (alarme iPhone)
+    playIphoneAlarm();
+
+    // On sort de loop() pour réévaluer la distance au prochain cycle sans exécuter le suivi de ligne
+    return;
+  }
+
+  // --- Étape 2 : Suivi de ligne classique ---
   readSensors();
 
-  // --- Étape 2 : Décision de mouvement (sans recul) ---
-  
   if (sensorRightState == LOW && sensorLeftState == LOW) {
     // Aucun capteur ne détecte la ligne (sur le blanc) -> Aller tout droit
     rotateMotor(TARGET_SPEED, TARGET_SPEED);
   } 
   else if (sensorRightState == HIGH && sensorLeftState == LOW) {
     // Le capteur droit détecte la ligne noire -> Pivoter à droite
-    // On arrête les moteurs droits et on avance les moteurs gauches
+    // On arrête les moteurs droits (côté intérieur) et on avance les moteurs gauches (côté extérieur)
     rotateMotor(0, TARGET_SPEED);
   } 
   else if (sensorRightState == LOW && sensorLeftState == HIGH) {
     // Le capteur gauche détecte la ligne noire -> Pivoter à gauche
-    // On arrête les moteurs gauches et on avance les moteurs droits
+    // On arrête les moteurs gauches (côté intérieur) et on avance les moteurs droits (côté extérieur)
     rotateMotor(TARGET_SPEED, 0);
   } 
   else if (sensorRightState == HIGH && sensorLeftState == HIGH) {
