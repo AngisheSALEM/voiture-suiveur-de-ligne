@@ -1,192 +1,154 @@
 /**
  * @file voiture-suiveur-de-ligne.ino
- * @brief Code de commande orienté objet (C++) pour un robot suiveur de ligne.
+ * @brief Code de commande procédural (C++) pour un robot suiveur de ligne.
  * 
  * Conçu spécifiquement pour le robot de la vidéo 'Hash Include Electronics'.
- * Ce code implémente des classes C++ pour une encapsulation et une modularité optimales.
- * La gestion des capteurs et celle des moteurs sont strictement isolées dans des classes dédiées.
- * Il intègre également la modification matérielle du registre TCCR0B à 7812.5 Hz.
+ * Ce code est simple, modulaire et sans classes C++. Il sépare proprement la 
+ * lecture des capteurs de l'actionnement des moteurs.
  * 
- * @author Expert Programmation Embarquée C++
+ * Note importante : La voiture évite les espaces blancs, reste sur la ligne 
+ * noire et ne recule jamais (elle s'arrête ou tourne en bloquant une roue).
+ * 
+ * @author Expert Programmation Embarquée
  * @date 2026-06-02
  */
-
-#include <Arduino.h>
 
 // =========================================================================
 // 1. CONFIGURATION DU MATÉRIEL & PINOUT
 // =========================================================================
 
-// Vitesse cible PWM (0 - 255)
-const int TARGET_SPEED = 180;
+// --- Capteurs Infrarouges (IR) ---
+const int PIN_SENSOR_RIGHT = 11; // Capteur Droit
+const int PIN_SENSOR_LEFT = 12;  // Capteur Gauche
+
+// --- Moteurs CC via L298N ---
+const int PIN_ENA = 5;  // Commande vitesse Moteur Droit (PWM)
+const int PIN_ENB = 6;  // Commande vitesse Moteur Gauche (PWM)
+
+// Signaux de direction du L298N
+const int PIN_IN1 = 7;  // Moteur Droit Direction A
+const int PIN_IN2 = 8;  // Moteur Droit Direction B
+const int PIN_IN3 = 9;  // Moteur Gauche Direction A
+const int PIN_IN4 = 10; // Moteur Gauche Direction B
+
+// --- Vitesse de déplacement ---
+const int TARGET_SPEED = 180; // Vitesse cible PWM (0 - 255)
 
 // =========================================================================
-// 2. CLASSE C++ : GESTION DES CAPTEURS INFRAROUGES
+// 2. VARIABLES GLOBALES DE STOCKAGE (Coordination)
 // =========================================================================
-class LineSensors {
-public:
-    /**
-     * @struct State
-     * @brief Encapsule l'état des deux capteurs IR.
-     */
-    struct State {
-        bool right;
-        bool left;
-    };
-
-    /**
-     * @brief Constructeur configurant les broches matérielles.
-     * @param pinRight Broche numérique du capteur droit.
-     * @param pinLeft Broche numérique du capteur gauche.
-     */
-    LineSensors(uint8_t pinRight, uint8_t pinLeft) 
-        : _pinRight(pinRight), _pinLeft(pinLeft) {}
-
-    /**
-     * @brief Initialise les broches physiques en mode entrée.
-     */
-    void begin() const {
-        pinMode(_pinRight, INPUT);
-        pinMode(_pinLeft, INPUT);
-    }
-
-    /**
-     * @brief Lit et retourne l'état actuel des capteurs.
-     */
-    State read() const {
-        return {
-            .right = (digitalRead(_pinRight) == HIGH),
-            .left = (digitalRead(_pinLeft) == HIGH)
-        };
-    }
-
-private:
-    const uint8_t _pinRight;
-    const uint8_t _pinLeft;
-};
+// Ces variables permettent de faire la transition entre la lecture et l'action
+int sensorRightState = LOW; // État du capteur droit (HIGH = noir, LOW = blanc)
+int sensorLeftState = LOW;  // État du capteur gauche (HIGH = noir, LOW = blanc)
 
 // =========================================================================
-// 3. CLASSE C++ : GESTION DU MOTOR DRIVER L298N
+// 3. MODULE CAPTEURS (Lecture)
 // =========================================================================
-class MotorDriver {
-public:
-    /**
-     * @brief Constructeur configurant l'ensemble des broches du driver L298N.
-     */
-    MotorDriver(uint8_t pinENA, uint8_t pinENB, 
-                uint8_t pinIN1, uint8_t pinIN2, 
-                uint8_t pinIN3, uint8_t pinIN4)
-        : _pinENA(pinENA), _pinENB(pinENB),
-          _pinIN1(pinIN1), _pinIN2(pinIN2),
-          _pinIN3(pinIN3), _pinIN4(pinIN4) {}
 
-    /**
-     * @brief Initialise les broches physiques en mode sortie.
-     */
-    void begin() const {
-        pinMode(_pinENA, OUTPUT);
-        pinMode(_pinENB, OUTPUT);
-        pinMode(_pinIN1, OUTPUT);
-        pinMode(_pinIN2, OUTPUT);
-        pinMode(_pinIN3, OUTPUT);
-        pinMode(_pinIN4, OUTPUT);
-        
-        // Arrêt par défaut au démarrage
-        stop();
-    }
-
-    /**
-     * @brief Arrête immédiatement les deux moteurs.
-     */
-    void stop() const {
-        rotate(0, 0);
-    }
-
-    /**
-     * @brief Pilote les moteurs droit et gauche de façon asynchrone.
-     * @param speedRight Consigne de vitesse moteur droit ([-255, 255]).
-     * @param speedLeft Consigne de vitesse moteur gauche ([-255, 255]).
-     */
-    void rotate(int speedRight, int speedLeft) const {
-        controlMotor(_pinENA, _pinIN1, _pinIN2, speedRight);
-        controlMotor(_pinENB, _pinIN3, _pinIN4, speedLeft);
-    }
-
-private:
-    const uint8_t _pinENA;
-    const uint8_t _pinENB;
-    const uint8_t _pinIN1;
-    const uint8_t _pinIN2;
-    const uint8_t _pinIN3;
-    const uint8_t _pinIN4;
-
-    /**
-     * @brief Contrôle générique d'un canal de moteur unique.
-     */
-    void controlMotor(uint8_t pinEN, uint8_t pinINa, uint8_t pinINb, int speed) const {
-        if (speed > 0) {
-            digitalWrite(pinINa, HIGH);
-            digitalWrite(pinINb, LOW);
-            analogWrite(pinEN, speed);
-        } else if (speed < 0) {
-            digitalWrite(pinINa, LOW);
-            digitalWrite(pinINb, HIGH);
-            analogWrite(pinEN, -speed);
-        } else {
-            digitalWrite(pinINa, LOW);
-            digitalWrite(pinINb, LOW);
-            analogWrite(pinEN, 0);
-        }
-    }
-};
+/**
+ * @brief Lit l'état des capteurs IR et met à jour les variables globales.
+ * 
+ * Cette fonction s'occupe exclusivement de l'acquisition des données physiques.
+ */
+void readSensors() {
+  sensorRightState = digitalRead(PIN_SENSOR_RIGHT);
+  sensorLeftState = digitalRead(PIN_SENSOR_LEFT);
+}
 
 // =========================================================================
-// 4. INSTANCIATION DES OBJETS C++
+// 4. MODULE MOTEURS (Action)
 // =========================================================================
-// Capteurs IR : Broches D11 (Droit), D12 (Gauche)
-LineSensors sensors(11, 12);
 
-// Moteurs : ENA=5, ENB=6, IN1=7, IN2=8, IN3=9, IN4=10
-MotorDriver motors(5, 6, 7, 8, 9, 10);
+/**
+ * @brief Contrôle la vitesse des moteurs droit et gauche (sans marche arrière).
+ * 
+ * Comme le robot ne doit jamais reculer, les vitesses négatives ne sont pas gérées.
+ * 
+ * @param speedRight Vitesse du moteur droit (0 à 255).
+ * @param speedLeft Vitesse du moteur gauche (0 à 255).
+ */
+void rotateMotor(int speedRight, int speedLeft) {
+  
+  // --- Contrôle du Moteur Droit ---
+  if (speedRight > 0) {
+    digitalWrite(PIN_IN1, HIGH);
+    digitalWrite(PIN_IN2, LOW);
+    analogWrite(PIN_ENA, speedRight);
+  } else {
+    // Moteur droit à l'arrêt
+    digitalWrite(PIN_IN1, LOW);
+    digitalWrite(PIN_IN2, LOW);
+    analogWrite(PIN_ENA, 0);
+  }
+
+  // --- Contrôle du Moteur Gauche ---
+  if (speedLeft > 0) {
+    digitalWrite(PIN_IN3, HIGH);
+    digitalWrite(PIN_IN4, LOW);
+    analogWrite(PIN_ENB, speedLeft);
+  } else {
+    // Moteur gauche à l'arrêt
+    digitalWrite(PIN_IN3, LOW);
+    digitalWrite(PIN_IN4, LOW);
+    analogWrite(PIN_ENB, 0);
+  }
+}
 
 // =========================================================================
-// 5. FONCTIONS STANDARD ARDUINO
+// 5. INITIALISATION DU SYSTÈME (Setup)
 // =========================================================================
 
 void setup() {
-    // Initialisation des modules C++
-    sensors.begin();
-    motors.begin();
+  // Configuration des broches des capteurs IR en entrée numérique
+  pinMode(PIN_SENSOR_RIGHT, INPUT);
+  pinMode(PIN_SENSOR_LEFT, INPUT);
 
-    // --- OPTIMISATION DU TIMER 0 (Fréquence PWM) ---
-    // Modification de la fréquence PWM des broches 5 (ENA) et 6 (ENB) à 7812.5 Hz.
-    // Diviseur de fréquence (prescaler) configuré à 8.
-    //
-    // Note : delay(), millis() et micros() s'écouleront 8x plus vite.
-    TCCR0B = (TCCR0B & 0b11111000) | 0b00000010;
+  // Configuration des broches du L298N en sortie numérique
+  pinMode(PIN_ENA, OUTPUT);
+  pinMode(PIN_ENB, OUTPUT);
+  pinMode(PIN_IN1, OUTPUT);
+  pinMode(PIN_IN2, OUTPUT);
+  pinMode(PIN_IN3, OUTPUT);
+  pinMode(PIN_IN4, OUTPUT);
+
+  // Sécurité : Arrêt complet au démarrage
+  rotateMotor(0, 0);
+
+  // --- OPTIMISATION DU TIMER 0 (Fréquence PWM) ---
+  // Modification de la fréquence PWM des broches 5 (ENA) et 6 (ENB) à 7812.5 Hz.
+  // Diviseur de fréquence (prescaler) configuré à 8.
+  //
+  // Note importante : delay() et millis() s'écouleront 8 fois plus vite.
+  // Exemple : delay(8000) prendra en réalité 1 seconde réelle.
+  TCCR0B = (TCCR0B & 0b11111000) | 0b00000010;
 }
 
-void loop() {
-    // 1. Module Capteurs : Lecture physique
-    LineSensors::State sensorState = sensors.read();
+// =========================================================================
+// 6. BOUCLE PRINCIPALE (Logique de Décision)
+// =========================================================================
 
-    // 2. Logique de décision & Action Moteurs
-    if (!sensorState.right && !sensorState.left) {
-        // Aucun capteur sur la ligne noire (LOW/LOW) -> Avancer
-        motors.rotate(TARGET_SPEED, TARGET_SPEED);
-    } 
-    else if (sensorState.right && !sensorState.left) {
-        // Capteur droit sur la ligne (HIGH/LOW) -> Pivoter à droite
-        // Moteur droit en arrière (-180), gauche en avant (180)
-        motors.rotate(-TARGET_SPEED, TARGET_SPEED);
-    } 
-    else if (!sensorState.right && sensorState.left) {
-        // Capteur gauche sur la ligne (LOW/HIGH) -> Pivoter à gauche
-        // Moteur gauche en arrière (-180), droit en avant (180)
-        motors.rotate(TARGET_SPEED, -TARGET_SPEED);
-    } 
-    else if (sensorState.right && sensorState.left) {
-        // Les deux capteurs sur la ligne (HIGH/HIGH) -> Arrêt complet
-        motors.stop();
-    }
+void loop() {
+  // --- Étape 1 : Lecture des capteurs ---
+  readSensors();
+
+  // --- Étape 2 : Décision de mouvement (sans recul) ---
+  
+  if (sensorRightState == LOW && sensorLeftState == LOW) {
+    // Aucun capteur ne détecte la ligne (sur le blanc) -> Aller tout droit
+    rotateMotor(TARGET_SPEED, TARGET_SPEED);
+  } 
+  else if (sensorRightState == HIGH && sensorLeftState == LOW) {
+    // Le capteur droit détecte la ligne noire -> Pivoter à droite
+    // On arrête la roue droite et on avance la roue gauche
+    rotateMotor(0, TARGET_SPEED);
+  } 
+  else if (sensorRightState == LOW && sensorLeftState == HIGH) {
+    // Le capteur gauche détecte la ligne noire -> Pivoter à gauche
+    // On arrête la roue gauche et on avance la roue droite
+    rotateMotor(TARGET_SPEED, 0);
+  } 
+  else if (sensorRightState == HIGH && sensorLeftState == HIGH) {
+    // Les deux capteurs sont sur la ligne noire -> Arrêt complet
+    rotateMotor(0, 0);
+  }
 }
