@@ -12,8 +12,8 @@ Le code a été conçu avec une architecture modulaire en C++ procédural (sans 
 * **Capteur Droit (Capteur 1) :** Connecté à la broche numérique **D13**
 * **Capteur Gauche (Capteur 2) :** Connecté à la broche numérique **D4**
 * **Comportement logique :** 
-  * `HIGH` lorsqu'il se trouve sur la **ligne noire**
-  * `LOW` lorsqu'il est sur la **surface blanche**
+  * `LOW` lorsqu'il se trouve sur la **ligne noire**
+  * `HIGH` lorsqu'il est sur la **surface blanche**
 
 ### 2. Contrôleur Moteurs L298N & Châssis 4 Moteurs
 Les 4 moteurs du châssis (4 roues motrices) sont branchés en parallèle de chaque côté sur le L298N :
@@ -88,10 +88,10 @@ Le robot évite activement le blanc et se recentre sur la ligne noire sans jamai
 
 | État Capteur Gauche (D4) | État Capteur Droit (D13) | Action | Vitesse Gauche | Vitesse Droite | Rationale |
 | :---: | :---: | :---: | :---: | :---: | :--- |
-| `LOW` (Blanc) | `LOW` (Blanc) | **Avancer** | `180` | `180` | Recherche active de la ligne droite |
-| `LOW` (Blanc) | `HIGH` (Noir) | **Pivoter à Droite** | `180` | `0` | Arrêt des roues droites pour se réaligner |
-| `HIGH` (Noir) | `LOW` (Blanc) | **Pivoter à Gauche** | `0` | `180` | Arrêt des roues gauches pour se réaligner |
-| `HIGH` (Noir) | `HIGH` (Noir) | **Arrêt Complet** | `0` | `0` | Fin de parcours ou détection d'intersection |
+| `HIGH` (Blanc) | `HIGH` (Blanc) | **Avancer** | `180` | `180` | Recherche active de la ligne droite |
+| `HIGH` (Blanc) | `LOW` (Noir) | **Pivoter à Droite** | `180` | `0` | Arrêt des roues droites pour se réaligner |
+| `LOW` (Noir) | `HIGH` (Blanc) | **Pivoter à Gauche** | `0` | `180` | Arrêt des roues gauches pour se réaligner |
+| `LOW` (Noir) | `LOW` (Noir) | **Arrêt Complet** | `0` | `0` | Fin de parcours ou détection d'intersection |
 
 ---
 
