@@ -10,10 +10,22 @@
  * Les moteurs droits (avant et arrière) sont branchés en parallèle sur le canal A du L298N (OUT1 & OUT2).
  * Les moteurs gauches (avant et arrière) sont branchés en parallèle sur le canal B du L298N (OUT3 & OUT4).
  * 
- * --- NOUVELLES FONCTIONNALITÉS ---
- * 1. Capteur Ultrason HC-SR04 (Trig=D2, Echo=D3) : Détecte un obstacle en face à moins de 20 cm.
- * 2. Buzzer Passif (D4) : Siffle l'alarme d'iPhone (mélodie Radar / Classic Alarm) en cas d'obstacle, 
- *    et force l'arrêt complet de la voiture.
+ * --- NOUVEAU PINOUT & MATÉRIEL ---
+ * - Moteurs Droits : ENA=11, IN1=10, IN2=9
+ * - Moteurs Gauches : ENB=3, IN3=6, IN4=5
+ * - Capteurs IR : Droite = 13 (Capteur 1), Gauche = 4 (Capteur 2)
+ * - Capteur Ultrason : Echo=8, Trig=7
+ * - Buzzer Passif : D2
+ * 
+ * --- NOTE D'EXPERT SUR LA FRÉQUENCE PWM & TIMER 2 ---
+ * ENA et ENB étant désormais connectés aux broches 11 et 3, le contrôle du PWM 
+ * dépend du **Timer 2** (et non plus du Timer 0).
+ * Nous configurons donc le Timer 2 en mode Fast PWM avec un diviseur (prescaler) de 8.
+ * Cela génère une fréquence parfaite de **7812.5 Hz** sur les sorties moteurs sans aucun sifflement !
+ * 
+ * **Avantage majeur :** Le Timer 0 restant inchangé, les fonctions temporelles standards 
+ * de l'Arduino (delay(), millis()) fonctionnent désormais à vitesse normale et exacte !
+ * (Pas besoin de multiplier par 8 les délais).
  * 
  * @author Expert Programmation Embarquée
  * @date 2026-06-02
@@ -22,29 +34,29 @@
 #include <Arduino.h>
 
 // =========================================================================
-// 1. CONFIGURATION DU MATÉRIEL & PINOUT
+// 1. CONFIGURATION DU MATÉRIEL & PINOUT (Mis à jour)
 // =========================================================================
 
 // --- Capteurs Infrarouges (IR) ---
-const int PIN_SENSOR_RIGHT = 11; // Capteur Droit
-const int PIN_SENSOR_LEFT = 12;  // Capteur Gauche
+const int PIN_SENSOR_RIGHT = 13; // Capteur Droit (Capteur 1)
+const int PIN_SENSOR_LEFT = 4;   // Capteur Gauche (Capteur 2)
 
 // --- Moteurs CC via L298N (Groupés par côté) ---
-const int PIN_ENA = 5;  // Commande vitesse Moteurs Droits (PWM)
-const int PIN_ENB = 6;  // Commande vitesse Moteurs Gauches (PWM)
+const int PIN_ENA = 11; // Commande vitesse Moteurs Droits (PWM sur Timer 2)
+const int PIN_ENB = 3;  // Commande vitesse Moteurs Gauches (PWM sur Timer 2)
 
 // Signaux de direction du L298N
-const int PIN_IN1 = 7;  // Moteurs Droits Direction A
-const int PIN_IN2 = 8;  // Moteurs Droits Direction B
-const int PIN_IN3 = 9;  // Moteurs Gauches Direction A
-const int PIN_IN4 = 10; // Moteurs Gauches Direction B
+const int PIN_IN1 = 10; // Moteurs Droits Direction A
+const int PIN_IN2 = 9;  // Moteurs Droits Direction B
+const int PIN_IN3 = 6;  // Moteurs Gauches Direction A
+const int PIN_IN4 = 5;  // Moteurs Gauches Direction B
 
 // --- Capteur Ultrason HC-SR04 ---
-const int PIN_TRIG = 2; // Broche Trigger
-const int PIN_ECHO = 3; // Broche Echo
+const int PIN_TRIG = 7; // Broche Trigger (Déclenchement)
+const int PIN_ECHO = 8; // Broche Echo (Réception)
 
 // --- Avertisseur Sonore ---
-const int PIN_BUZZER = 4; // Broche Buzzer Passif
+const int PIN_BUZZER = 2; // Broche Buzzer Passif
 
 // --- Paramètres de comportement ---
 const int TARGET_SPEED = 180;              // Vitesse cible PWM (0 - 255)
@@ -97,33 +109,57 @@ long getDistance() {
 }
 
 // =========================================================================
-// 4. MODULE AVERTISSEUR (Buzzer & iPhone Alarm)
+// 4. MODULE AVERTISSEUR (Buzzer bare-metal indépendant des timers)
 // =========================================================================
+
+/**
+ * @brief Génère un signal sonore précis sur le buzzer par commutation logicielle.
+ * 
+ * Cette méthode évite d'utiliser la fonction standard tone() qui entrerait en 
+ * conflit avec la modification du registre du Timer 2 (broches 11 et 3).
+ * 
+ * @param frequency Fréquence du son en Hertz (Hz).
+ * @param durationMs Durée du son en millisecondes (ms).
+ */
+void buzzerTone(unsigned int frequency, unsigned long durationMs) {
+  // Période totale du signal en microsecondes
+  unsigned long periodUs = 1000000UL / frequency;
+  // Demi-période pour l'alternance haut/bas du signal carré
+  unsigned long halfPeriodUs = periodUs / 2;
+  
+  unsigned long elapsedUs = 0;
+  unsigned long durationUs = durationMs * 1000UL;
+  
+  while (elapsedUs < durationUs) {
+    digitalWrite(PIN_BUZZER, HIGH);
+    delayMicroseconds(halfPeriodUs);
+    digitalWrite(PIN_BUZZER, LOW);
+    delayMicroseconds(halfPeriodUs);
+    elapsedUs += periodUs;
+  }
+}
 
 /**
  * @brief Joue le motif de la célèbre alarme "Radar / Classic Alarm" d'iOS.
  * 
- * NOTE D'EXPERT : L'augmentation de la fréquence du Timer 0 (pins 5 & 6)
- * fait que delay() s'exécute 8 fois plus vite. Nous appliquons donc un 
- * coefficient multiplicateur standard (* 8) pour conserver le rythme réel.
+ * Les durées de temps utilisées ici sont réelles et précises (100% standards)
+ * car le Timer 0 n'est pas altéré.
  */
 void playIphoneAlarm() {
   // Mélodie du signal d'alerte iPhone "Radar"
-  // Motif de 4 notes rapides ascendantes suivi d'une note longue
   int alarmMelody[] = {880, 988, 1047, 1318}; // Fréquences (La5, Si5, Do6, Mi6)
   int noteDurations[] = {100, 100, 100, 300}; // Durée de chaque note en ms
 
   for (int repeat = 0; repeat < 2; repeat++) { // Répète l'alarme 2 fois
     for (int i = 0; i < 4; i++) {
-      // Émission du son sur le buzzer passif
-      tone(PIN_BUZZER, alarmMelody[i], noteDurations[i] * 8);
+      // Émission du son
+      buzzerTone(alarmMelody[i], noteDurations[i]);
       
-      // Attente pour séparer proprement les notes
-      delay((noteDurations[i] + 30) * 8);
+      // Attente standard pour séparer proprement les notes
+      delay(noteDurations[i] + 30);
     }
-    // Courte pause entre les motifs répétitifs
-    noTone(PIN_BUZZER);
-    delay(200 * 8);
+    // Pause entre les motifs répétitifs
+    delay(200);
   }
 }
 
@@ -190,13 +226,14 @@ void setup() {
   // Sécurité : Arrêt complet au démarrage
   rotateMotor(0, 0);
 
-  // --- OPTIMISATION DU TIMER 0 (Fréquence PWM) ---
-  // Modification de la fréquence PWM des broches 5 (ENA) et 6 (ENB) à 7812.5 Hz.
-  // Diviseur de fréquence (prescaler) configuré à 8.
-  //
-  // Note importante : delay() et millis() s'écouleront 8 fois plus vite.
-  // Exemple : delay(8000) prendra en réalité 1 seconde réelle.
-  TCCR0B = (TCCR0B & 0b11111000) | 0b00000010;
+  // --- OPTIMISATION MATÉRIELLE DU TIMER 2 (Pins ENA=11 & ENB=3) ---
+  // 1. Configurer le Timer 2 en mode Fast PWM 8-bit (bits WGM21 & WGM20 à 1 dans TCCR2A)
+  TCCR2A = (TCCR2A & 0b11111100) | 0b00000011;
+
+  // 2. Configurer le diviseur de fréquence (prescaler) à 8 (bits CS22=0, CS21=1, CS20=0 dans TCCR2B)
+  // Fréquence résultante : 16 MHz / (8 * 256) = 7812.5 Hz.
+  // Vos moteurs DC 4RM fonctionneront avec fluidité absolue, sans aucun sifflement !
+  TCCR2B = (TCCR2B & 0b11111000) | 0b00000010;
 }
 
 // =========================================================================
